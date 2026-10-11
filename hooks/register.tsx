@@ -3,15 +3,23 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { DEFAULT_MODEL, Director, findModel, type Host, MODEL_LABELS, NARRATOR_MODELS, type NarratorModel } from './director'
 import { DEFAULT_LOOK, findLook, LOOK_NAMES, LOOKS, lookFor } from './looks'
-import type { FablesScene } from '../types'
+import type { FablesScene, WeatherReading } from '../types'
 
 import { H, MAX_SVG, resumeAt, sceneToSvg, speaksAfter, W } from './svg'
+import { pushReading, weatherTexts } from './weather'
 
 const scene = atom({ plugin: 'fables', key: 'scene' } as const, null)
 const enabled = atom({ plugin: 'fables', key: 'enabled' } as const, true)
 const style = atom({ plugin: 'fables', key: 'style' } as const, DEFAULT_LOOK)
+const collapsed = atom({ plugin: 'fables', key: 'collapsed' } as const, false)
+const weatherNow = atom({ plugin: 'fables', key: 'weatherNow' } as const, null)
+const weatherTurns = atom({ plugin: 'fables', key: 'weatherTurns' } as const, [] as WeatherReading[])
+
+/** How often the live forecast is read while the session runs: a local read, no model call. */
+const WEATHER_EVERY_MS = 5000
 
 const STORE_ENABLED = 'enabled'
+const STORE_COLLAPSED = 'collapsed'
 const STORE_PIXEL = 'pixelArt'
 const STORE_STYLE = 'style'
 const STORE_MODEL = 'model'
@@ -65,6 +73,40 @@ async function setOn($: EngineInterface, n: Director, at: Host, value: boolean) 
   await n.setOn(at, value)
   await $.store.set(STORE_ENABLED, value)
   await update($, enabled, () => value)
+  // Turning it on unfolds it too, so /fables on always brings the cartoon back.
+  if (value) await setCollapsed($, n, at, false)
+}
+
+/**
+ * Reads the context window; `isTurnEnd` also adds it to the sparkline's turns.
+ * The live reading is written only when it changed, so the band is not drawn
+ * again for nothing.
+ */
+async function refreshWeather($: EngineInterface, isTurnEnd: boolean) {
+  // The forecast is a nicety: a session that cannot say its usage just has none.
+  const context = await $.session.usage().then(
+    usage => usage.context,
+    () => undefined,
+  )
+  if (!context?.window) return
+  const tokens = context.tokens ?? 0
+  const percent = context.percent ?? Math.round((tokens / context.window) * 100)
+  const reading: WeatherReading = { tokens, window: context.window, percent }
+  const was = await read($, weatherNow)
+  if (was?.tokens !== reading.tokens || was.window !== reading.window) await update($, weatherNow, () => reading)
+  if (isTurnEnd) await update($, weatherTurns, turns => pushReading(turns, reading))
+}
+
+/**
+ * Folded, the band is the token weather alone and the narrator stops asking
+ * the model, so no tokens go on scenes nobody sees; the activity log still
+ * fills, so the story picks up where the work is once it is unfolded.
+ */
+async function setCollapsed($: EngineInterface, n: Director, at: Host, value: boolean) {
+  await $.store.set(STORE_COLLAPSED, value)
+  await update($, collapsed, () => value)
+  const isOn = !value && (await read($, enabled))
+  if (isOn !== n.isOn) await n.setOn(at, isOn)
 }
 
 /**
@@ -99,9 +141,12 @@ export const register: Register = (on, options) => {
   n.look = DEFAULT_LOOK
 
   on('session.start', async ($, e, next) => {
-    n.isOn = (await $.store.get(STORE_ENABLED)) !== false
+    const isEnabled = (await $.store.get(STORE_ENABLED)) !== false
+    const isCollapsed = (await $.store.get(STORE_COLLAPSED)) === true
+    n.isOn = isEnabled && !isCollapsed
     n.model = findModel(await $.store.get(STORE_MODEL)) ?? configured
-    await update($, enabled, () => n.isOn)
+    await update($, enabled, () => isEnabled)
+    await update($, collapsed, () => isCollapsed)
     const saved = await $.store.get(STORE_STYLE)
     // Pixel art was once a switch of its own: someone who turned it off keeps the original look, drawn smooth.
     const smooth = (await $.store.get(STORE_PIXEL)) === false
@@ -113,7 +158,10 @@ export const register: Register = (on, options) => {
       argumentHint: '[on|off|style [name|off]|model [sonnet|haiku]]',
     })
     $.clock.every(1000, () => void n.tick(host($, band)))
-    return next(e)
+    $.clock.every(WEATHER_EVERY_MS, () => void refreshWeather($, false))
+    const started = await next(e)
+    await refreshWeather($, true)
+    return started
   })
 
   on('command.run', { command: 'fables' }, async ($, e) => {
@@ -179,14 +227,33 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) n.complete(e.reason)
-    return next(e)
+    const done = await next(e)
+    // Main-loop turns only: a subagent's turn is not one of the person's.
+    if (e.agentId === undefined) await refreshWeather($, true)
+    return done
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
-    const current = await read($, scene)
-    if (!current || !(await read($, enabled))) return next(e)
-    const { Svg } = $.ui.resolve(e)
+    if (!(await read($, enabled))) return next(e)
+    const { Box, Button, Svg, Text } = $.ui.resolve(e)
+    const fold = (value: boolean) => () => setCollapsed($, n, host($, band), value)
+    const weather = weatherTexts(Text, (await read($, weatherNow)) ?? undefined, await read($, weatherTurns), e.props.bodyColumns)
+    const isCollapsed = await read($, collapsed)
+    const current = isCollapsed ? null : await read($, scene)
+    // Folded, or no scene up between turns: the token weather is the whole band.
+    if (!current) {
+      return (
+        <Box flexDirection="row" alignItems="center" justifyContent="space-between" paddingX={1}>
+          <Box flexDirection="row">{weather}</Box>
+          {isCollapsed ? (
+            <Button key="fables-expand" label="Развернуть мультик" dimColor onPress={fold(false)} />
+          ) : (
+            <Button key="fables-collapse" role="dismiss" label="✕" plain dimColor onPress={fold(true)} />
+          )}
+        </Box>
+      )
+    }
     // The interactive frame does not size itself from the markup (left alone it
     // is a 300x150 box), so give it the band's box; a new width draws anew.
     band.box = bandBox(e.props.bodyColumns)
@@ -196,13 +263,21 @@ export const register: Register = (on, options) => {
     const along = Math.floor(((await $.clock.now()) - at) / 100) / 10
     const resumed = resumeAt(base, along)
     return (
-      <Svg
-        source={resumed.length <= MAX_SVG ? resumed : base}
-        alt={current.caption}
-        width={width}
-        height={height}
-        isInteractive
-      />
+      <Box flexDirection="column">
+        <Box position="relative">
+          <Svg
+            source={resumed.length <= MAX_SVG ? resumed : base}
+            alt={current.caption}
+            width={width}
+            height={height}
+            isInteractive
+          />
+          <Box position="absolute" top={0} right={1}>
+            <Button key="fables-collapse" role="dismiss" label="✕" plain onPress={fold(true)} />
+          </Box>
+        </Box>
+        <Box flexDirection="row" paddingX={1} paddingTop={1}>{weather}</Box>
+      </Box>
     )
   })
 }

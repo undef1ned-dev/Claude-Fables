@@ -59,11 +59,20 @@ export type FablesScene = {
   enter?: 'fade'
 }
 
+/** One reading of the context window, for the token weather under the cartoon. */
+export type WeatherReading = { tokens: number; window: number; percent: number }
+
 declare module 'claude-code' {
   interface PluginState {
     fables: {
       scene: FablesScene | null
       enabled: boolean
+      /** Folded to the token weather by its close button: no scene is narrated or drawn until it is unfolded. */
+      collapsed: boolean
+      /** The context window as last read, refreshed while Claude works. */
+      weatherNow: WeatherReading | null
+      /** One reading per finished turn, the newest last, for the sparkline. */
+      weatherTurns: WeatherReading[]
       /** The style scenes are drawn in (looks.ts): 'pixel' by default, 'original', or a gallery style. */
       style: string
     }
