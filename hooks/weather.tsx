@@ -15,11 +15,11 @@ const BARS = '▁▂▃▄▅▆▇█'
 export type Forecast = { upTo: number; icon: string; word: string; color: string }
 
 export const FORECAST: readonly Forecast[] = [
-  { upTo: 25, icon: '☀', word: 'Clear', color: 'yellow' },
-  { upTo: 50, icon: '☁', word: 'Cloudy', color: 'cyan' },
-  { upTo: 75, icon: '☂', word: 'Showers', color: 'blue' },
-  { upTo: 90, icon: '☇', word: 'Storm', color: 'magenta' },
-  { upTo: Infinity, icon: '↯', word: 'Compact soon', color: 'red' },
+  { upTo: 25, icon: '☀', word: 'Ясно', color: 'yellow' },
+  { upTo: 50, icon: '☁', word: 'Облачно', color: 'cyan' },
+  { upTo: 75, icon: '☂', word: 'Дождь', color: 'blue' },
+  { upTo: 90, icon: '☇', word: 'Гроза', color: 'magenta' },
+  { upTo: Infinity, icon: '↯', word: 'Скоро сжатие', color: 'red' },
 ]
 
 export const forecastFor = (percent: number): Forecast => FORECAST.find(f => percent < f.upTo) ?? FORECAST[FORECAST.length - 1]!
@@ -42,8 +42,8 @@ export function trend(history: readonly WeatherReading[]): string {
   const [before, last] = history.slice(-2)
   if (!before || !last) return ''
   const delta = last.tokens - before.tokens
-  if (delta === 0) return '  steady'
-  return delta > 0 ? `  ▲ +${short(delta)} last turn` : `  ▼ ${short(-delta)} last turn`
+  if (delta === 0) return '  без изменений'
+  return delta > 0 ? `  ▲ +${short(delta)} за ход` : `  ▼ ${short(-delta)} за ход`
 }
 
 /**
@@ -62,11 +62,11 @@ export function weatherTexts(
   const f = forecastFor(at.percent)
   const parts = [
     <Text color={f.color} bold>{`${f.icon}  ${f.word}`}</Text>,
-    <Text>{`  ${at.percent}% of context`}</Text>,
+    <Text>{`  ${at.percent}% контекста`}</Text>,
     <Text dimColor>{`  ${short(at.tokens)} / ${short(at.window)}`}</Text>,
   ]
   if (columns >= 60 && history.length > 0) {
-    parts.push(<Text dimColor>{'   last turns '}</Text>)
+    parts.push(<Text dimColor>{'   по ходам '}</Text>)
     parts.push(<Text color={f.color}>{sparkline(history)}</Text>)
     if (history.length > 1) parts.push(<Text dimColor>{trend(history)}</Text>)
   }

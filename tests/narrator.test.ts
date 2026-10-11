@@ -1,6 +1,7 @@
 import type { ModelCompleteResult, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { IDLE_SCENES } from '../hooks/idle'
 import { resumeAt } from '../hooks/svg'
 
 const SCENE = {
@@ -75,8 +76,10 @@ test('a garbage reply is skipped and the narrator backs off', async ($, on) => {
   await clock.advance(6000)
   expect(calls).toBe(2)
 
+  // No reply made a scene: the band still plays the idle reel.
   const desktop = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await desktop.find({ type: 'Svg' })).toBe(undefined)
+  const drawn = (await desktop.find({ type: 'Svg' })) as { props: { alt: string } } | undefined
+  expect(IDLE_SCENES.map(s => s.caption)).toContain(drawn?.props.alt)
   await desktop.unmount()
 })
 

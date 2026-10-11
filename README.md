@@ -119,6 +119,9 @@ tool calls, Claude's own words ──► activity log (last 14 lines)
 <p align="center"><img src="assets/use.gif" alt="Claude waving in the forest: /fables on, and hello!" width="960"></p>
 
 - `/fables`: toggle the mod on or off. `/fables on` and `/fables off` also work. The setting is remembered across sessions.
+- Beneath the scene sits a token weather row: how full the context window is, and how it grew over the last turns. Its **✕** folds the cartoon to that row alone, with a button to unfold it. Folded, no scene is asked for, so it costs nothing.
+- The row's **⟲ Сжать** button compacts the conversation, like `/compact`: a first press arms it, a second within five seconds compacts. It is hidden while Claude works.
+- `/fables idle on|off`: while nothing is asked (a new window, between tasks) the band plays an idle reel of scenes written ahead, never by the model, moving on every three minutes. On by default; off, the band shows the weather alone between tasks.
 - `/fables style <name>`: draw every scene in one of the styles below, for example `/fables style ukiyo-e` or `/fables style golden age`. `/fables style` lists them, and `/fables style off` goes back to the default, Pixel Art. It is remembered across sessions.
 - `/fables pixel off` and `/fables pixel on` still work: they switch between the original look drawn smooth and its pixel art.
 - `/fables model haiku` and `/fables model sonnet`: pick who writes the story. Sonnet is the default and writes wittier scenes; Haiku answers in about a second and costs less, but writes plainer captions and slips a little more often (a bad reply is simply skipped). `/fables model` shows which one is on. The choice is remembered across sessions; the config menu's **Scene model** (`pluginConfigs.fables.model`) sets the default.

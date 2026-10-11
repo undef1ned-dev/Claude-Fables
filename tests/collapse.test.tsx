@@ -37,8 +37,10 @@ describe('the close button', () => {
     await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' } as any)
     const ui = await $.ui.mount(BAND as any)
 
-    // Before any scene the band is the weather, with a way to fold it.
-    expect(await ui.find({ type: 'Text', text: /Clear/ })).toBeDefined()
+    // Before anything is asked the idle reel plays, the weather beneath it, and no model is asked.
+    expect(await ui.find({ type: 'Svg' } as any)).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Ясно/ })).toBeDefined()
+    expect(asks).toBe(0)
 
     await $.prompt.submit({ text: 'fix the date bug' } as any)
     await clock.advance(1000)
@@ -46,17 +48,17 @@ describe('the close button', () => {
     expect(asks).toBe(1)
     // The cartoon is up, with the weather beneath it.
     expect(await ui.find({ type: 'Svg' } as any)).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /18% of context/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /18% контекста/ })).toBeDefined()
 
     // The live reading follows the work without waiting for the turn to end.
     tokens = 134_400
     await clock.advance(5000)
-    expect(await ui.find({ type: 'Text', text: /Showers/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Дождь/ })).toBeDefined()
 
     await ui.press({ key: 'fables-collapse' })
     expect(await ui.find({ key: 'fables-expand' })).toBeDefined()
     expect(await ui.find({ type: 'Svg' } as any)).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /67% of context/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /67% контекста/ })).toBeDefined()
 
     // Folded: a whole new turn of work goes by and not one scene is asked for.
     asks = 0
@@ -64,7 +66,7 @@ describe('the close button', () => {
     await $.prompt.submit({ text: 'and add a test' } as any)
     for (let i = 0; i < 30; i++) await clock.advance(1000)
     expect(asks).toBe(0)
-    expect(await ui.find({ type: 'Text', text: /last turn/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /за ход/ })).toBeDefined()
 
     // Unfolded: the story picks up again.
     await ui.press({ key: 'fables-expand' })

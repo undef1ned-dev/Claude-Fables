@@ -3,10 +3,11 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { DEFAULT_MODEL, Director, findModel, type Host, MODEL_LABELS, NARRATOR_MODELS, type NarratorModel } from './director'
 import { DEFAULT_LOOK, findLook, LOOK_NAMES, LOOKS, lookFor } from './looks'
-import type { FablesScene, WeatherReading } from '../types'
+import type { CompactState, FablesScene, WeatherReading } from '../types'
 
 import { H, MAX_SVG, resumeAt, sceneToSvg, speaksAfter, W } from './svg'
-import { pushReading, weatherTexts } from './weather'
+import { pushReading, short, weatherTexts } from './weather'
+import { IDLE_EVERY_MS, idleScene } from './idle'
 
 const scene = atom({ plugin: 'fables', key: 'scene' } as const, null)
 const enabled = atom({ plugin: 'fables', key: 'enabled' } as const, true)
@@ -14,6 +15,10 @@ const style = atom({ plugin: 'fables', key: 'style' } as const, DEFAULT_LOOK)
 const collapsed = atom({ plugin: 'fables', key: 'collapsed' } as const, false)
 const weatherNow = atom({ plugin: 'fables', key: 'weatherNow' } as const, null)
 const weatherTurns = atom({ plugin: 'fables', key: 'weatherTurns' } as const, [] as WeatherReading[])
+const idle = atom({ plugin: 'fables', key: 'idle' } as const, true)
+const idleStep = atom({ plugin: 'fables', key: 'idleStep' } as const, 0)
+const STORE_IDLE = 'idle'
+const compactState = atom({ plugin: 'fables', key: 'compact' } as const, 'idle' as CompactState)
 
 /** How often the live forecast is read while the session runs: a local read, no model call. */
 const WEATHER_EVERY_MS = 5000
@@ -97,6 +102,41 @@ async function refreshWeather($: EngineInterface, isTurnEnd: boolean) {
   if (isTurnEnd) await update($, weatherTurns, turns => pushReading(turns, reading))
 }
 
+/** A press arms the compact button; a second within this long compacts, as compacting costs a model call. */
+const COMPACT_CONFIRM_MS = 5000
+const COMPACT_LABELS: Record<CompactState, string> = { idle: '⟲ Сжать', armed: 'Точно сжать?', running: 'Сжимаю…' }
+
+/**
+ * The compact button: the first press arms it, a second within a few seconds
+ * runs the same compaction /compact does, and a toast says how it went.
+ */
+async function pressCompact($: EngineInterface) {
+  const state = await read($, compactState)
+  if (state === 'running') return
+  if (state === 'idle') {
+    await update($, compactState, () => 'armed')
+    $.clock.after(COMPACT_CONFIRM_MS, () => void update($, compactState, s => (s === 'armed' ? 'idle' : s)))
+    return
+  }
+  await update($, compactState, () => 'running')
+  try {
+    const done = await $.session.compact().catch(() => undefined)
+    if (!done) {
+      // A headless session (the desktop's Code tab runs on the SDK) cannot compact
+      // between turns: there compaction is a turn of its own, the /compact command.
+      await $.command.run({ command: 'compact', args: '' })
+      $.ui.toast('Сжатие запущено')
+    } else if (done.skip !== undefined) $.ui.toast(`Сжатие отменено: ${done.skip}`)
+    else if (done.tokensBefore && done.tokensAfter) $.ui.toast(`Контекст сжат: ${short(done.tokensBefore)} → ${short(done.tokensAfter)}`)
+    else $.ui.toast('Контекст сжат')
+  } catch (err) {
+    $.ui.toast(`Не получилось сжать: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    await update($, compactState, () => 'idle')
+    await refreshWeather($, false)
+  }
+}
+
 /**
  * Folded, the band is the token weather alone and the narrator stops asking
  * the model, so no tokens go on scenes nobody sees; the activity log still
@@ -155,10 +195,16 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'fables',
       description: 'Claude Fables: turn the cartoons above the prompt on or off, pick a style, or pick the model that writes them',
-      argumentHint: '[on|off|style [name|off]|model [sonnet|haiku]]',
+      argumentHint: '[on|off|idle [on|off]|style [name|off]|model [sonnet|haiku]]',
     })
     $.clock.every(1000, () => void n.tick(host($, band)))
     $.clock.every(WEATHER_EVERY_MS, () => void refreshWeather($, false))
+    // The idle reel starts where the clock puts it, so a new window does not always open on the same scene.
+    const isIdleOn = (await $.store.get(STORE_IDLE)) !== false
+    await update($, idle, () => isIdleOn)
+    const startedAt = await $.clock.now()
+    await update($, idleStep, () => Math.floor(startedAt / IDLE_EVERY_MS) % 1000)
+    $.clock.every(IDLE_EVERY_MS, () => void update($, idleStep, step => step + 1))
     const started = await next(e)
     await refreshWeather($, true)
     return started
@@ -187,6 +233,13 @@ export const register: Register = (on, options) => {
       const look = /^(off|none|default|plain)$/.test(want) ? lookFor(DEFAULT_LOOK) : findLook(want)
       if (!look) return { text: `No style called "${want}". /fables style lists them.` }
       return chooseLook($, n, look.name)
+    }
+    const id = /^idle(?:\s+(on|off))?$/.exec(arg)
+    if (id) {
+      const value = id[1] ? id[1] === 'on' : !(await read($, idle))
+      await $.store.set(STORE_IDLE, value)
+      await update($, idle, () => value)
+      return { text: value ? 'The idle reel plays while nothing is asked.' : 'The idle reel is off: the band shows the weather between tasks.' }
     }
     // Pixel art is a style now; the old switch still works, as a way to pick it or the smooth original.
     const px = /^pixel(?:\s+(on|off))?$/.exec(arg)
@@ -240,17 +293,33 @@ export const register: Register = (on, options) => {
     const fold = (value: boolean) => () => setCollapsed($, n, host($, band), value)
     const weather = weatherTexts(Text, (await read($, weatherNow)) ?? undefined, await read($, weatherTurns), e.props.bodyColumns)
     const isCollapsed = await read($, collapsed)
-    const current = isCollapsed ? null : await read($, scene)
-    // Folded, or no scene up between turns: the token weather is the whole band.
+    // Compaction only runs between turns, so the button shows only then.
+    const compacting = await read($, compactState)
+    const compactButton = e.props.isWorking ? null : (
+      <Button
+        key="fables-compact"
+        label={COMPACT_LABELS[compacting]}
+        dimColor={compacting === 'idle'}
+        variant={compacting === 'armed' ? 'primary' : undefined}
+        onPress={() => pressCompact($)}
+      />
+    )
+    // No scene of the work up (a new window, between turns): the idle reel plays, written ahead, asking nothing.
+    const working = isCollapsed ? null : await read($, scene)
+    const current = working ?? (!isCollapsed && (await read($, idle)) ? idleScene(await read($, idleStep)) : null)
+    // Folded, or nothing to play: the token weather is the whole band.
     if (!current) {
       return (
         <Box flexDirection="row" alignItems="center" justifyContent="space-between" paddingX={1}>
           <Box flexDirection="row">{weather}</Box>
-          {isCollapsed ? (
-            <Button key="fables-expand" label="Развернуть мультик" dimColor onPress={fold(false)} />
-          ) : (
-            <Button key="fables-collapse" role="dismiss" label="✕" plain dimColor onPress={fold(true)} />
-          )}
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            {compactButton}
+            {isCollapsed ? (
+              <Button key="fables-expand" label="Развернуть" dimColor onPress={fold(false)} />
+            ) : (
+              <Button key="fables-collapse" role="dismiss" label="✕" plain dimColor onPress={fold(true)} />
+            )}
+          </Box>
         </Box>
       )
     }
@@ -264,19 +333,20 @@ export const register: Register = (on, options) => {
     const resumed = resumeAt(base, along)
     return (
       <Box flexDirection="column">
-        <Box position="relative">
-          <Svg
-            source={resumed.length <= MAX_SVG ? resumed : base}
-            alt={current.caption}
-            width={width}
-            height={height}
-            isInteractive
-          />
-          <Box position="absolute" top={0} right={1}>
-            <Button key="fables-collapse" role="dismiss" label="✕" plain onPress={fold(true)} />
+        <Svg
+          source={resumed.length <= MAX_SVG ? resumed : base}
+          alt={current.caption}
+          width={width}
+          height={height}
+          isInteractive
+        />
+        <Box flexDirection="row" alignItems="center" justifyContent="space-between" paddingX={1} paddingTop={1}>
+          <Box flexDirection="row">{weather}</Box>
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            {compactButton}
+            <Button key="fables-collapse" role="dismiss" label="✕" plain dimColor onPress={fold(true)} />
           </Box>
         </Box>
-        <Box flexDirection="row" paddingX={1} paddingTop={1}>{weather}</Box>
       </Box>
     )
   })

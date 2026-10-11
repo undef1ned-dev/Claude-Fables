@@ -59,6 +59,9 @@ export type FablesScene = {
   enter?: 'fade'
 }
 
+/** The compact button: at rest, armed by a first press (a second compacts), or compacting. */
+export type CompactState = 'idle' | 'armed' | 'running'
+
 /** One reading of the context window, for the token weather under the cartoon. */
 export type WeatherReading = { tokens: number; window: number; percent: number }
 
@@ -69,6 +72,12 @@ declare module 'claude-code' {
       enabled: boolean
       /** Folded to the token weather by its close button: no scene is narrated or drawn until it is unfolded. */
       collapsed: boolean
+      /** Whether the idle reel (idle.ts) plays while nobody has asked anything. */
+      idle: boolean
+      /** Which scene of the idle reel is up: it counts on every few minutes. */
+      idleStep: number
+      /** The compact button in the weather row. */
+      compact: CompactState
       /** The context window as last read, refreshed while Claude works. */
       weatherNow: WeatherReading | null
       /** One reading per finished turn, the newest last, for the sparkline. */
